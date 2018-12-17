@@ -1,0 +1,483 @@
+---
+title: "Regression Bootstrap"
+output:
+  html_document:
+    theme: lumen
+    toc: yes
+    toc_float: yes
+    code_folding: show
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+Problem 1
+---
+
+The "catsM" data in the boot package has heart weights and body weights on 97 male cats.
+
+In this problem we will fit a model to predict the heart weight (g) given the body weight (kg)
+of the cat.
+
+
+  a. As a first step, fit a simple linear regression model to the data, and display a fitted line plot (ggplot is nice for this). 
+```{r}
+library(boot)
+library(ggplot2)
+str(catsM)
+summary(catsM)
+
+y <- catsM$Hwt
+x <- catsM$Bwt
+L <- lm(y~x)
+summary(L)
+
+
+g <- ggplot(catsM, aes(x, y)) + geom_point()
+
+## add the fitted line
+g + stat_smooth(method=lm) + ggtitle("Fitted Value plot of SLR")
+
+
+```
+
+Since, the p-value of the model ~ 0, the model seems to be a good fit based on the data at 5% significance level. The fitted line covers most of the points except two outliers deviating highly from the straigh line. 
+
+  b.   Display diagnostic residual plots and comment on the fit. 
+
+```{r}
+par(mfrow=c(1,2))
+plot(L, which=1:2)
+par(mfrow=c(1,1))
+
+```
+
+The two diagnostic residual plots- residuals vs. fitted value plot and normal Q-Q plot of residuals, are plotted. The fit seems okay by observing the plots. From the above residual plots, we don't see the severe violation of the regression assumptions. 
+
+c. Does the error variance seem constant? 
+ 
+ 
+ Observing the Residual Vs Fitted values plot, we can see some moderate megaphone shape opening at right. The variance seems higher for higher fitted values than that of lower fitted values. Due to the higher variance caused by obs. nos. 93 and 97, the megaphone shape is obvious. So, due to this reason, we may conclude that constant error variance assumption might not be satisfied. 
+ 
+
+d. Does the error distribution look approximately normal? (Refer to the Q-Q plot).
+
+Referring to normal Q-Q plot, we observe few residuals which do not fall on the straight line especially middle values and extreme end values. So, the error distribution may not follow approximate normal distribution.  
+
+e. Based on your preliminary results above, do you believe that model-based or case resampling
+is more appropriate to investigate the stability of this model?
+
+Based on the preliminary results above, the case resampling is more appropriate to investigate the stability of this model as we doubt on constant variance assumption and normality assumption. Case resampling only assumed errors are independent whereas model based considers all the assumptions to be valid. So, it is better to use model-based or case resampling for this particular data set. 
+
+Problem 2
+---
+
+  a. Implement resampling by cases for the model. Use the boot function because the returned value of the boot function will be needed later.
+
+To bootstrap the regression using the boot function, first we need to write a statistic function that will fit the model and return the coefficients for the intercept and slope estimates.
+
+The first argument of the function should be the data.
+The second argument of the function should be the index vector.
+In this example, the statistic function returns a vector of length 2, containing the (intercept, slope) estimates.
+
+```{r}
+library(MASS)
+
+fit.cf <- function(dat, i) {
+  samp <- dat[i, ]  #subset the data
+  coef(lm(samp$Hwt~samp$Bwt))  
+}
+
+#df <- data.frame(logbody=x, logbrain=y)
+boot.obj <- boot(catsM, statistic=fit.cf, R=1000)
+boot.obj
+
+sd(boot.obj$t[,2])
+
+```
+
+we implemented resampling by cases for the model using boot function. 
+
+
+  b.   Give a summary table and plots for the bootstrapped intercepts and slopes. 
+```{r}
+summary(boot.obj$t)
+```
+
+From the summary table we can observe that the mean and median are approximately
+equal for both coefficients, and that the quartiles are approximately symmetric
+around the median for both. This is consistent with a symmetric distribution of
+the replicates.
+
+c. Do the intercepts and slopes appear to have approximately normal distributions?
+```{r}
+par(mfrow=c(1,2))
+truehist(boot.obj$t[,1], main="Intercepts")
+abline(v=boot.obj$t0[1], col=2)
+qqnorm(boot.obj$t[,1], main="Intercepts")
+qqline(boot.obj$t[,1])
+
+
+truehist(boot.obj$t[,2], main="Slopes")
+abline(v=boot.obj$t0[2], col=2)
+qqnorm(boot.obj$t[,2], main="Slopes")
+qqline(boot.obj$t[,2])
+
+par(mfrow=c(1,1))
+```
+
+The plots of the replicates above also suggest that each of the coefficient 
+replicates have a symmetric distribution(except the intercept distribution is quite right skewed) and each distribution appears approximately normal.
+
+
+d. What is the model standard error (RMSE)? Does it seem to be accurate based on the
+results of the bootstrap? 
+
+```{r}
+ fit.rmse <- function(dat, i) {
+  samp <- dat[i, ]
+  L.samp <- lm(samp$Hwt ~ samp$Bwt)  #fit model for this sample
+  mean((fitted(L.samp) - samp$Hwt)^2)^.5
+}
+
+boot.obj2 <- boot(catsM, statistic=fit.rmse, R=1000)
+boot.obj2
+
+summary(L)$sigma
+```
+
+The model standard error is 1.556849. It seems to be accurate based on the results of the bootstrap as the bootstrap standard error is very close to 1.55((which is nearly equal to the 1.556849).
+
+
+
+Problem 3
+---
+
+  a. Implement model-based resampling for the model. 
+  
+In model-based resampling, we resample the modified residuals.
+The raw residuals $e_j=y_j-\hat y_j$. These can be extracted from
+the model fit object returned by `lm`. 
+```{r}
+head(L$res)
+```
+For the simple linear regression model we have
+$$
+ e_j = \varepsilon_j - \sum_{k=1}^n h_{jk} \varepsilon_k, 
+$$
+where $h_{jk}$ are the leverages
+$$
+h_{jk} = \frac{1}{n} + \frac{(x_j-\bar x)(x_k - \bar x)}{SS_x}.
+$$
+#### Modified residuals
+
+We can modify the raw residuals to have constant variance. 
+$$
+  r_j = \frac{e_j}{\sqrt{1-h_{jj}}}.
+$$
+
+These modified residuals can be computed by the definition (directly) using
+`hatvalues` to get the $h_{jj}$, or by `rstandard` function with `sd=1`.
+
+### Algorithm for Model-based resampling
+
+We first fit the simple linear regression model and obtain
+
+* Slope and intercept estimates $b_0, b_1$.
+* Estimate of error variance $s^2$.
+* Fitted values $\hat y_j$, $j=1,\dots, n$.
+* Raw residuals $e_j=y_j - \hat y_j$, $j=1,\dots, n$.
+* We compute modified residuals $r_j$, $j=1,\dots, n$.
+
+For $b=1,\dots,B$,
+1. For $j=1,\dots,n$ (bootstrap step)
+
+   a. Set $x_j^* = x_j$  (no change).
+   b. Resample $n$ errors $e^*_j$ from the modified residuals
+   $r_1 - \bar r, \dots r_n - \bar r$ with replacement.
+   c. Set $y_j^* = b_0 + b_1 x_j + e^*_j$, $j=1, \dots, n$.
+   
+2. Fit an OLS regression to the bootstrapped sample
+$$
+ (x_1^*, y_1^*), \dots, (x_n^*, y_n^*),
+$$
+to get intercept and slope estimates $b_0^{(b)}, b_1^{(b)}$, and
+error variance estimate ${s^2}^{(b)}$.
+
+The output of this bootstrap includes three vectors of length $B$:
+
+* a vector of length $B$ of bootstrapped slope estimates
+* a vector of length $B$ of bootstrapped intercept estimates
+* a vector of length $B$ of bootstrapped error variance estimates,
+
+#### Implementation of the Model-based resampling
+
+
+```{r}
+e <- L$residuals  #raw residuals
+r <- rstandard(L, sd=1)   #modified residuals
+rr <- r - mean(r)
+n <- nrow(catsM)
+
+cf <- coef(L)
+b0 <- cf[1]
+b1 <- cf[2]
+s <- summary(L)$sigma
+B <- 1000
+
+model.out <- replicate(B, expr = {
+  xb <- x
+  rb <- sample(rr, size=n, replace=TRUE)
+  yb <- b0 + xb * b1 + rb
+  fit.mod <- lm(yb ~ xb)
+  c(coef(fit.mod), s = summary(fit.mod)$sigma)
+})
+
+dim(model.out)
+model.reps <- t(model.out)
+head(model.reps)
+colnames(model.reps) = c("b0", "b1", "s")
+```
+
+
+Theoretically, if the model is correct, 
+$$
+ se(\hat \beta_1) = \left( \frac{\sigma^2}{SS_x} \right)^{1/2}.
+$$
+For the intercept,
+$$
+ \sigma^2(b_1) = \sigma^2 \left[ \frac{1}{n} + \frac{\overline{X}^2}
+ {\sum (X_i - \overline{X})^2 } \right].
+$$
+
+For the catsM data, $\widehat{se}(\hat \beta_1)$ is computed by:
+```{r}
+n <- NROW(catsM)
+s <- summary(L)$sigma
+SSx <- (n - 1) * var(x)
+se.beta1 <- sqrt(s^2 / SSx) 
+se.beta1
+```
+
+The bootstrap estimate of se for the slope should be close to the estimate
+we obtain above from the model RSS. 
+
+```{r}
+sd(model.reps[,2])
+se.beta1
+
+standard.errors<-cbind(sd(model.reps[,2]),se.beta1)
+colnames(standard.errors)<-c("Bootstrap model based", "Original")
+rownames(standard.errors)<-c("Standard Errors")
+standard.errors
+
+```
+
+
+
+
+  b. Give a summary table and plots for the bootstrapped intercepts and slopes. 
+```{r}
+ summary(model.reps)
+library(MASS)
+
+par(mfrow=c(1,2))
+truehist(model.reps[,2], main="Slopes")
+truehist(model.reps[,1], main="Intercepts")
+
+par(mfrow=c(1,2))
+qqnorm(model.reps[,1], main="Intercepts")
+qqline(model.reps[,1])
+
+qqnorm(model.reps[,2], main="Slopes")
+qqline(model.reps[,2])
+
+```
+
+Observing the histograms and Q-Q plots of intercept and slope, it seems the the intercepts and the slopes are approximately normal though the intercepts have very small right skewness.
+
+
+c. Compare the bootstrapped intercepts and slopes from the cases resampling
+above with the intercepts and slopes from model-based resampling. Does the
+sampling distribution of the replicates seem to be the same for resampling by cases and resampling errors approaches? You could try comparing histograms or do a two-sample QQ plot. 
+```{r}
+par(mfrow=c(2,2))
+
+truehist(model.reps[,1], main="Intercepts for Model Based")
+truehist(boot.obj$t[,1], main="Intercepts for Resampling error")
+
+
+truehist(model.reps[,2], main="Slope for Model Based")
+truehist(boot.obj$t[,2], main="Slope Resampling error")
+
+par(mfrow=c(1,1))
+```
+
+Looking at the histogram of intercepts for both the model, it seems that both of them are approxitely normal and approaches same way. However, for resampling error method, the distribution is flatter compared to the model based. 
+
+
+d. Compare the standard errors reported for each method and the theoretical 
+standard errors for intercepts and for slopes. 
+```{r}
+theoritical<-cbind(summary(L)$coefficients[1,2],summary(L)$coefficients[2,2])
+
+model_based<-cbind(sd(model.reps[,1]),sd(model.reps[,2]))
+
+resample_error<-cbind(sd(boot.obj$t[,1]),sd(boot.obj$t[,2]))
+
+comparison<-rbind(theoritical,model_based,resample_error)
+rownames(comparison)<-c("Theoritical","Model Based","Resample error Method")
+colnames(comparison)<-c("Intercept","Slope")
+comparison
+
+```
+
+The standard errors of slopes and intercepts indicate that theoritical model has the lowest standard errors and resampling cases has the highest standard errors. The model based (resampling errors) has standard errors very close to theoritical model.
+
+e. From this analysis, would model-based or cases resampling be better for
+estimating standard errors of the estimated slope and estimated intercept?
+
+Model-based is better compared to resampling cases for estimating standard errors as it has lower estimated standard errors for both intercepts and slopes than resampling cases model and the estimated values are very close to theoritical model. 
+
+Problem 4
+---
+
+Using your results from the cases resampling, perform an analysis for
+influential cases. 
+
+  a. Use jackknife-after-bootstrap to compute usual jackknife influence values.
+Which observations have the most influence? Try using `which.max` and 
+`which.min` to identify the most influential observations.
+
+(For this you can use the `boot.array` function or `empinf`, but notice 
+that the default for `empinf` is not what you want. Check the help page for details.)
+
+
+```{r}
+
+influential <- empinf(boot.obj, index=1, type="reg")
+which.max(influential)
+which.min(influential)
+
+influential <- empinf(boot.obj, index=2, type="reg")
+which.max(influential)
+which.min(influential)
+
+
+```
+
+We observe observation nos. 93 and 97 are the most influential observations for both the slope and intercepts since they have extreme values .
+
+  b.   Plot empirical influence of the standardized jackknife influence values
+for intercepts and for slopes using `jack.after.boot`. Check the arguments 
+of `jack.after.boot` to make sure that you are plotting the standardized
+jackinife influence values.
+
+```{r}
+jack.after.boot(boot.obj, index=1, useJ= TRUE, stinf = TRUE, main="Intercepts")
+jack.after.boot(boot.obj, index=2, useJ= TRUE, stinf = TRUE, main="Slopes")
+
+```
+
+This plot is easier to interpret if the standardized values are plotted, which is the default.Alternately, the empirical influence values can be plotted. 
+
+We can see that 2 of these observations(93 and 97) appear to have extreme standardized jackknife values.
+
+
+
+c. Based on the plot, which observations have unusually large negative or
+positive influence values on slope?
+
+For Slope, the observation no. 93 has unusually negative vaue(standardized value around -3) and observation nos. 97(standardized value greater than 5) and 88(standardized value around 3)
+
+
+Problem 5
+---
+
+a. Run other influence diagnostics for the model. See `influence.measures`
+for an easy way to obtain Cooks distance, dffits, etc. These measures
+are explained in the help page.
+
+
+Notice that "For linear models, rstandard(*, type = "predictive") provides leave-one-out cross validation residuals, and the "PRESS" statistic (PREdictive Sum of Squares, the same as the CV score) of model model is
+```
+   PRESS <- sum(rstandard(model, type="pred")^2)
+```
+```{r}
+SL.stdres <- data.frame(ID=c(1:nrow(catsM)), StdRes= rstandard(L)) #Create a data frame from studentized residual
+SL.outliers <- SL.stdres[abs(SL.stdres$StdRes)>2,] #Only Select outliers
+plot(SL.stdres,pch=16,type="b") #plotting studentized residuals versus data order
+points(SL.outliers, col="red", pch=16)
+abline(h=2) #draw a horizontal reference line at 2
+abline(h=-2)  #draw a horizontal reference line at -2
+text(SL.outliers,labels = SL.outliers$ID,pos=2) #Mark the observation ID for the outliers
+
+
+############### Leverage 
+
+SL.leverega <- data.frame(ID=c(1:nrow(catsM)), Leverage=hatvalues(L)) #hatvalues gets the leverage values
+
+LeverageLimit <- 2*2/nrow(catsM) #We can calculate leverage limit= 2*(k+1)/n
+
+SL.HighLeverage <- SL.leverega[SL.leverega$Leverage>LeverageLimit,] #We can then identify high leverage case
+
+plot(SL.leverega, pch=16, type="b") #we can also plot them
+points(SL.HighLeverage, col="red", pch=16)
+abline(h=LeverageLimit)
+text(SL.HighLeverage,labels = SL.HighLeverage$ID,pos=2) 
+
+############ Inluential Case
+#######DFITS
+SL.dfits <- data.frame(ID=c(1:nrow(catsM)), DFITS=dffits(L)) #calculate DFITS
+
+InfluenceLimit <- 2*sqrt((1+1)/nrow(catsM)) #We can calculate influential case cut off level = 2*sqrt(k+1)/n
+
+SL.InfluentialCase <- SL.dfits[abs(SL.dfits$DFITS)>InfluenceLimit,] #We can then identify influential case
+
+plot(abs(SL.dfits$DFITS), pch=16, type="b") #we can also plot them
+points(SL.InfluentialCase, col="red", pch=16)
+abline(h=InfluenceLimit)
+text(SL.InfluentialCase,labels = SL.InfluentialCase$ID,pos=2) 
+
+#######Cook's Distance
+SL.CD <- data.frame(ID=c(1:nrow(catsM)), CD=cooks.distance(L)) #calculate Cook's Distance
+
+CDLimit <- qf(0.5,2,nrow(catsM)-1-1) #We can calculate influential case cut off level
+
+
+SL.CDInfluential <- SL.CD[SL.CD$CD>CDLimit,] #We can then identify influential case
+
+plot(SL.CD, pch=16, type="b") #we can also plot them
+points(SL.CDInfluential, col="red", pch=16)
+abline(h=CDLimit)
+text(SL.InfluentialCase,labels = SL.InfluentialCase$ID,pos=2) 
+
+
+```
+
+We plotted the studentized residuals, HI, DFITs, and Cook's distance for finding the influencial observations. We also calculated and shown the reference lines in the plot to identify the specific observation numbers as influential. 
+Using the diagnostic plots, we observe the following observations as the influential: 
+Outliers: 22, 45, 88,93,97 
+High Leverage: 1,2,94,95,96,97 
+DFITS: 3,11,88,89,93,97 
+Cook's Distance: None 
+
+Also, we used the influence.measures() function to obtain Cooks distance, dffits, etc. in easy way:
+
+```{r}
+influence.measures(L)
+```
+
+Using the influence.measure function, we observe 6 observations to be significant such as observations 1, 2, 93,45,96, and 97.
+
+b. Interpret and compare these influence measures with your results in
+Problem 4.
+
+
+In problem 4, we observed observations 93 and 97 large negative and large positive respectively for the slope while 97 & 93 as large negative and large positive respectively for the intercept.
+
+So, only observations 93 and 97 have similarity between problem 4 and identified in outliers, DFITS and influence.measure in problem 5 while observation 97 has been identified only as high leverage. 
+Hence, throughout the observations, we identified observation nos. 93 and 97 as influential observations. 
